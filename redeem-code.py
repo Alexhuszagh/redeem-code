@@ -205,7 +205,6 @@ def parse_chunked_rows(chunk):
     return data
 
 
-# TODO(ahuszagh) Might not need global arguments? NICE
 def get_redeem_codes(table, memo):
     '''Process all the rows in the table to extract the redeem codes'''
 
