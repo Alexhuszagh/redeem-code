@@ -260,8 +260,7 @@ async def on_ready():
         logging.info('Started fetch and send codes bot.')
 
 
-@discord.ext.tasks.loop(seconds=60)
-#@discord.ext.tasks.loop(time=ARGUMENTS.time)
+@discord.ext.tasks.loop(time=ARGUMENTS.time)
 async def fetch_and_send_codes():
     now = datetime.datetime.now().time().strftime('%H:%M:%S')
     logging.info(f'Started session at daily time of {now}.')
