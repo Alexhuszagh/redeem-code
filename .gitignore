@@ -1,9 +1,12 @@
+# Discord-specific files
+.env
+*.log
+redeem-codes.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-.env
-redeem-codes.txt
 
 # C extensions
 *.so

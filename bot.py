@@ -24,14 +24,14 @@
     You can also add the following environment variables as well:
         - `DEFAULT_APPLICATION_ID`
         - `DEFAULT_MEMO_FILENAME`
-        - `DEFAULT_TIME`
+        - `DEFAULT_INVERVAL`
+        - `DEFAULT_LOG_FILE`
         - `DEFAULT_LOG_LEVEL`
         - `DEFAULT_PUBLIC_KEY`
         - `DEFAULT_WIKI_URL`
 '''
 
 import argparse
-import datetime
 import discord
 import discord.ext.tasks
 import dotenv
@@ -52,10 +52,6 @@ def get_environment_value(key, default=None):
     return value or default
 
 
-def parse_time(string):
-    return datetime.datetime.strptime(string, '%H:%M:%S').time()
-
-
 DEFAULT_WIKI_URL = get_environment_value(
     key='DEFAULT_WIKI_URL',
     default='https://lovenikki.fandom.com/wiki/Category:Redeem_Code',
@@ -70,15 +66,16 @@ DEFAULT_PUBLIC_KEY = get_environment_value(
 )
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL = os.getenv('DISCORD_CHANNEL')
-DEFAULT_TIME = get_environment_value(
-    key='DEFAULT_TIME',
-    default='12:30:00',
+DEFAULT_INVERVAL = get_environment_value(
+    key='DEFAULT_INVERVAL',
+    default='240',
 )
 DEFAULT_MEMO_FILENAME = get_environment_value(
     key='DEFAULT_MEMO_FILENAME',
     default='redeem-codes.txt',
 )
 DEFAULT_LOG_LEVEL = os.getenv('DEFAULT_LOG_LEVEL')
+DEFAULT_LOG_FILE = os.getenv('DEFAULT_LOG_FILE')
 INTENTS = discord.Intents()
 CLIENT = discord.Client(intents=INTENTS)
 CODE_MEMO = set()
@@ -112,9 +109,10 @@ ARGPARSER.add_argument(
     default=DISCORD_CHANNEL,
 )
 ARGPARSER.add_argument(
-    '--time',
-    help='Time to send messages daily.',
-    default=DEFAULT_TIME,
+    '--interval',
+    help='Interval (in minutes) to check for new redeem codes.',
+    type=int,
+    default=int(DEFAULT_INVERVAL),
 )
 ARGPARSER.add_argument(
     '--memo-filename',
@@ -126,10 +124,23 @@ ARGPARSER.add_argument(
     help='Threshold level for the logger.',
     default=DEFAULT_LOG_LEVEL,
 )
+ARGPARSER.add_argument(
+    '--log-file',
+    help='Path to file for the logger (None for stdout).',
+    default=DEFAULT_LOG_FILE,
+)
 ARGUMENTS = ARGPARSER.parse_args()
-ARGUMENTS.time = parse_time(ARGUMENTS.time)
+LOGGER = logging.getLogger('dicord')
+if ARGUMENTS.log_file is not None:
+    HANDLER = logging.FileHandler(
+        filename=ARGUMENTS.log_file,
+        encoding='utf-8',
+    )
+else:
+    HANDLER = logging.StreamHandler()
+LOGGER.addHandler(HANDLER)
 if ARGUMENTS.log_level is not None:
-    logging.getLogger().setLevel(getattr(logging, ARGUMENTS.log_level.upper()))
+    LOGGER.setLevel(getattr(logging, ARGUMENTS.log_level.upper()))
 
 
 def retry_session(retries, session=None, backoff_factor=0.3):
@@ -160,7 +171,7 @@ def get_redeem_code_table(url):
     elements = soup.select('table.redeemcode')
     if len(elements) != 1:
         msg = f'Got unexpected number of items, raw HTML output is "{content}"'
-        logging.error(msg)
+        LOGGER.error(msg)
         raise ValueError(msg)
     return elements[0]
 
@@ -191,7 +202,7 @@ def chunks_exact(iterable, interval):
 
     if chunk:
         msg = f'Did not exact interval, had {len(chunk)} leftover items'
-        logging.error(msg)
+        LOGGER.error(msg)
         raise ValueError(msg)
 
 
@@ -228,14 +239,14 @@ def get_redeem_codes(table, memo):
         return added
     elif (len(rows) - 1) % 3 != 0:
         msg = f'Expected 1 + 3*N rows, instead got table output of "{table}"'
-        logging.error(msg)
+        LOGGER.error(msg)
         raise ValueError(msg)
 
     for chunk in chunks_exact(rows[1:], 3):
         code_data = parse_chunked_rows(chunk)
         if 'Code' not in code_data:
             message = f'Got invalid for data for table "{table}"'
-            logging.error(message)
+            LOGGER.error(message)
             raise ValueError(message)
         code = code_data['Code']
         current.add(code)
@@ -252,45 +263,45 @@ def get_redeem_codes(table, memo):
 
 @CLIENT.event
 async def on_ready():
-    logging.info('Starting up Discord client at `on_ready`.')
+    LOGGER.info('Starting up Discord client at `on_ready`.')
 
     if not fetch_and_send_codes.is_running():
         fetch_and_send_codes.start()
-        logging.info('Started fetch and send codes bot.')
+        LOGGER.info('Started fetch and send codes bot.')
 
 
-@discord.ext.tasks.loop(time=ARGUMENTS.time)
+@discord.ext.tasks.loop(minutes=ARGUMENTS.interval)
 async def fetch_and_send_codes():
-    now = datetime.datetime.now().time().strftime('%H:%M:%S')
-    logging.info(f'Started session at daily time of {now}.')
+    LOGGER.info('Attempting to fetch redeem codes.')
 
     channel = await CLIENT.fetch_channel(ARGUMENTS.discord_channel)
     table = get_redeem_code_table(ARGUMENTS.wiki_url)
-    added_codes = get_redeem_codes(table, CODE_MEMO)
-    logging.info(f'Fetched codes and have current memo of [{", ".join(CODE_MEMO)}]')
-    if added_codes:
-        delimiter = "\n  • "
-        formatted_codes = delimiter + delimiter.join(added_codes)
-        message = f'@redeemcodes Newly added redeem codes are: {formatted_codes}'
-        logging.info(f'Sending channel message of "{message}".')
+    added = get_redeem_codes(table, CODE_MEMO)
+    memo = ', '.join(CODE_MEMO)
+    LOGGER.info(f'Fetched codes and have current memo of [{memo}]')
+    if added:
+        delimiter = '\n  • '
+        formatted = delimiter + delimiter.join(added)
+        message = f'@redeemcodes Newly added redeem codes are: {formatted}'
+        LOGGER.info(f'Sending channel message of {repr(message)}.')
         await channel.send(message)
 
 
 @fetch_and_send_codes.before_loop
 async def wait_login():
-    logging.info('Waiting for client login')
+    LOGGER.info('Waiting for client login')
     await CLIENT.wait_until_ready()
-    logging.info('Client logged in')
+    LOGGER.info('Client logged in')
 
 
 def main():
     if ARGUMENTS.discord_token is None:
         message = 'Did not provide Discord bot token.'
-        logging.fatal(message)
+        LOGGER.fatal(message)
         raise ValueError(message)
     if ARGUMENTS.discord_channel is None:
         message = 'Did not provide Discord channel ID.'
-        logging.fatal(message)
+        LOGGER.fatal(message)
         raise ValueError(message)
 
     if os.path.exists(ARGUMENTS.memo_filename):
@@ -299,8 +310,8 @@ def main():
             # can get extra newlines or empty entries
             CODE_MEMO.update([i for i in redeem_codes if i])
 
-    logging.info(f'Started Discord bot with codes of [{", ".join(CODE_MEMO)}]')
-    CLIENT.run(ARGUMENTS.discord_token)
+    LOGGER.info(f'Started Discord bot with codes of [{", ".join(CODE_MEMO)}]')
+    CLIENT.run(ARGUMENTS.discord_token, log_handler=HANDLER)
 
 
 if __name__ == '__main__':
